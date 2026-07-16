@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QHBoxLayout,
+    QCheckBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QAction
@@ -121,11 +122,23 @@ class MainWindow(QMainWindow):
         clear_btn = QPushButton("Clear Placements")
         clear_btn.clicked.connect(self.clear_placements)
         placement_layout.addWidget(clear_btn)
+
+        # New explicit controls for trays (visible in Placement panel)
+        self.show_trays_cb = QCheckBox("Show Trays")
+        self.show_trays_cb.setChecked(True)
+        self.show_trays_cb.stateChanged.connect(self._toggle_show_trays)
+        placement_layout.addWidget(self.show_trays_cb)
+
+        self.tray_mode_btn = QPushButton("Tray: Double")
+        self.tray_mode_btn.setCheckable(False)
+        self.tray_mode_btn.clicked.connect(self._toggle_tray_mode)
+        placement_layout.addWidget(self.tray_mode_btn)
+
         self.placement_widget.setLayout(placement_layout)
         self.placement_dock.setWidget(self.placement_widget)
         self.addDockWidget(Qt.RightDockWidgetArea, self.placement_dock)
 
-        # Toolbar
+        # Toolbar (kept for Import/Fit convenience)
         toolbar = self.addToolBar("Main")
         import_action = QAction("Import Pattern", self)
         import_action.triggered.connect(self.import_pattern)
@@ -134,12 +147,6 @@ class MainWindow(QMainWindow):
         fit_action = QAction("Fit View", self)
         fit_action.triggered.connect(self.preview.fit_view)
         toolbar.addAction(fit_action)
-
-        # Add a quick toggle for tray mode (single vs double)
-        self.tray_double = True
-        self._tray_action = QAction("Tray: Double", self)
-        self._tray_action.triggered.connect(self._toggle_tray_mode)
-        toolbar.addAction(self._tray_action)
 
         self.statusBar().showMessage("Stamp Builder — ready")
 
@@ -154,13 +161,25 @@ class MainWindow(QMainWindow):
         self.tray1_cross = None
         self.tray2_cross = None
 
+        # tray mode and visibility state
+        self.tray_double = True
+        self.show_trays = True
+
         # Try to auto-load assets if available (best-effort)
+        self._try_load_assets()
+
+    def _toggle_show_trays(self, state=None):
+        # Checkbox calls this; state may be Qt.Checked/Unchecked or None
+        try:
+            self.show_trays = bool(self.show_trays_cb.isChecked())
+        except Exception:
+            self.show_trays = True
         self._try_load_assets()
 
     def _toggle_tray_mode(self):
         self.tray_double = not self.tray_double
-        self._tray_action.setText("Tray: Double" if self.tray_double else "Tray: Single")
-        # re-render assets (quick redraw)
+        # update button text
+        self.tray_mode_btn.setText("Tray: Double" if self.tray_double else "Tray: Single")
         self._try_load_assets()
 
     def _compute_cross_section(self, mesh, axis='x', ratio=0.5):
@@ -243,7 +262,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 load_errors.append(f"{STAMP_BASE.name}: {e}")
 
-        # Load tray(s) according to mode
+        # Load tray(s) according to mode and visibility
         from shapely.affinity import translate as _shapely_translate
         base_centroid = None
         try:
@@ -252,7 +271,7 @@ class MainWindow(QMainWindow):
         except Exception:
             base_centroid = None
 
-        if TRAY1.exists():
+        if self.show_trays and TRAY1.exists():
             try:
                 mesh = geometry.load_mesh(TRAY1)
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
@@ -274,7 +293,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 load_errors.append(f"{TRAY1.name}: {e}")
 
-        if self.tray_double and TRAY2.exists():
+        if self.show_trays and self.tray_double and TRAY2.exists():
             try:
                 mesh = geometry.load_mesh(TRAY2)
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
