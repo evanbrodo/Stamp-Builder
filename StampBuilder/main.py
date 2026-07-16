@@ -244,12 +244,29 @@ class MainWindow(QMainWindow):
                 load_errors.append(f"{STAMP_BASE.name}: {e}")
 
         # Load tray(s) according to mode
+        from shapely.affinity import translate as _shapely_translate
+        base_centroid = None
+        try:
+            if self.base_cross is not None:
+                base_centroid = self.base_cross.centroid
+        except Exception:
+            base_centroid = None
+
         if TRAY1.exists():
             try:
                 mesh = geometry.load_mesh(TRAY1)
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
                 if cross is None:
                     cross = geometry.silhouette(mesh)
+                # recentre relative to base so items appear together in preview
+                try:
+                    if base_centroid is not None:
+                        tray_cent = cross.centroid
+                        dx = base_centroid.x - tray_cent.x
+                        dy = base_centroid.y - tray_cent.y
+                        cross = _shapely_translate(cross, xoff=dx, yoff=dy)
+                except Exception:
+                    pass
                 self.tray1_cross = cross
                 item = rendering.make_item_from_shapely(cross, pen_color="#444444", fill_color="#ffe6e6", z=1)
                 self.preview.scene().addItem(item)
@@ -263,6 +280,15 @@ class MainWindow(QMainWindow):
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
                 if cross is None:
                     cross = geometry.silhouette(mesh)
+                # recentre relative to base
+                try:
+                    if base_centroid is not None:
+                        tray_cent = cross.centroid
+                        dx = base_centroid.x - tray_cent.x
+                        dy = base_centroid.y - tray_cent.y
+                        cross = _shapely_translate(cross, xoff=dx, yoff=dy)
+                except Exception:
+                    pass
                 self.tray2_cross = cross
                 item = rendering.make_item_from_shapely(cross, pen_color="#444444", fill_color="#e6ffe6", z=1)
                 self.preview.scene().addItem(item)
