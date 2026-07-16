@@ -1,5 +1,8 @@
-# Stamp-Builder
+Initial README updates and run instructions.
 
-Initial scaffold and specification for the Stamp Builder application.
+Run the app (after cloning and creating a venv):
 
-See SPEC.md for full specification and prioritized backlog.
+python -m pip install -r requirements.txt
+python -m StampBuilder.main
+
+Place asset files (StampBase.stl, Tray1Slot.stl, Tray2Slot.stl) into the assets/ folder to auto-load them on startup.

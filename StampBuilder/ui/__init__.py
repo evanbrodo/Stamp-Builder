@@ -1,5 +1,4 @@
 """UI widgets and dialogs.
 
-Place higher-level Qt widgets here (asset manager, transform controls, export dialog).
+Higher-level widgets could go here in the future. Kept minimal for now.
 """
-
