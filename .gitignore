@@ -1,0 +1,20 @@
+# Byte-compiled / virtual env files
+__pycache__/
+venv/
+.env
+*.pyc
+*.pyo
+*.pyd
+dist/
+build/
+*.egg-info/
+
+# Editor
+.vscode/
+.idea/
+
+# PyInstaller
+*.spec
+
+# Mac
+.DS_Store
