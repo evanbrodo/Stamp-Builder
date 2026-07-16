@@ -203,19 +203,32 @@ class MainWindow(QMainWindow):
             return None
 
         origin = mesh.centroid.copy()
-        if axis == 'x':
-            origin[0] = minb[0] + ratio * (maxb[0] - minb[0])
-            normal = [1.0, 0.0, 0.0]
-        else:
-            origin[1] = minb[1] + ratio * (maxb[1] - minb[1])
-            normal = [0.0, 1.0, 0.0]
+        # Force X-axis slice at ratio (user requested .5 on X)
+        origin[0] = minb[0] + ratio * (maxb[0] - minb[0])
+        normal = [1.0, 0.0, 0.0]
 
         try:
             section = mesh.section(plane_origin=origin, plane_normal=normal)
             if section is None:
                 return None
             path2d = section.to_planar()
+            # prefer polygons_full but accept polygons or converted paths if needed
             polys = getattr(path2d, 'polygons_full', None)
+            if not polys:
+                polys = getattr(path2d, 'polygons', None)
+            if not polys:
+                # try to construct polygons from path segments if available
+                try:
+                    raw = getattr(path2d, 'paths', None)
+                    polys = []
+                    if raw:
+                        for p in raw:
+                            coords = getattr(p, 'vertices', None)
+                            if coords is not None and len(coords) >= 3:
+                                from shapely.geometry import Polygon
+                                polys.append(Polygon(coords))
+                except Exception:
+                    polys = None
             if not polys:
                 return None
             geom = unary_union(polys)
@@ -242,20 +255,23 @@ class MainWindow(QMainWindow):
 
         loaded_any = False
         load_errors = []
+        used_base_fallback = False
 
-        # Load base first
+        # Load base first (but draw after trays so it's on top)
+        base_geom = None
         if STAMP_BASE.exists():
             try:
                 mesh = geometry.load_mesh(STAMP_BASE)
-                # try vertical cross-section first
+                # force vertical cross-section at X ratio=0.5
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
                 if cross is None:
                     # fallback to top-down silhouette if no section
                     sil = geometry.silhouette(mesh)
                     cross = sil
+                    used_base_fallback = True
+                    print("Base: using silhouette fallback (no X=0.5 cross-section found)")
                 self.base_cross = cross
-                item = rendering.make_item_from_shapely(cross, pen_color="#000000", fill_color="#ffefe0", z=0)
-                self.preview.scene().addItem(item)
+                base_geom = cross
                 loaded_any = True
             except ImportError as e:
                 load_errors.append(f"{STAMP_BASE.name}: missing libs: {e}")
@@ -266,8 +282,8 @@ class MainWindow(QMainWindow):
         from shapely.affinity import translate as _shapely_translate
         base_centroid = None
         try:
-            if self.base_cross is not None:
-                base_centroid = self.base_cross.centroid
+            if base_geom is not None:
+                base_centroid = base_geom.centroid
         except Exception:
             base_centroid = None
 
@@ -275,9 +291,12 @@ class MainWindow(QMainWindow):
             try:
                 mesh = geometry.load_mesh(TRAY1)
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
+                used_tray1_fallback = False
                 if cross is None:
                     cross = geometry.silhouette(mesh)
-                # recentre relative to base so items appear together in preview
+                    used_tray1_fallback = True
+                    print("Tray1: using silhouette fallback (no X=0.5 cross-section found)")
+                # recenter relative to base so items appear together in preview
                 try:
                     if base_centroid is not None:
                         tray_cent = cross.centroid
@@ -297,9 +316,12 @@ class MainWindow(QMainWindow):
             try:
                 mesh = geometry.load_mesh(TRAY2)
                 cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
+                used_tray2_fallback = False
                 if cross is None:
                     cross = geometry.silhouette(mesh)
-                # recentre relative to base
+                    used_tray2_fallback = True
+                    print("Tray2: using silhouette fallback (no X=0.5 cross-section found)")
+                # recenter relative to base
                 try:
                     if base_centroid is not None:
                         tray_cent = cross.centroid
@@ -315,6 +337,14 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 load_errors.append(f"{TRAY2.name}: {e}")
 
+        # Draw base on top of trays (higher z) so it visually overlays them
+        if base_geom is not None:
+            try:
+                base_item = rendering.make_item_from_shapely(base_geom, pen_color="#000000", fill_color="#ffefe0", z=3)
+                self.preview.scene().addItem(base_item)
+            except Exception as e:
+                print("Failed to render base on top:", e)
+
         if load_errors:
             self.statusBar().showMessage("Some assets failed to render. Check console for details.")
             for msg in load_errors:
@@ -323,7 +353,7 @@ class MainWindow(QMainWindow):
         # Re-create pattern preview items (stacked) so they remain visible after scene clear
         for i, pat in enumerate(self.patterns):
             try:
-                preview_item = rendering.make_item_from_shapely(pat['silhouette'], pen_color="#003366", fill_color="#cfeff6", z=2)
+                preview_item = rendering.make_item_from_shapely(pat['silhouette'], pen_color="#003366", fill_color="#cfeff6", z=4)
                 x, y = (-50 * i, 0)
                 preview_item.setPos(x, y)
                 self.preview.scene().addItem(preview_item)
@@ -340,7 +370,10 @@ class MainWindow(QMainWindow):
         if loaded_any:
             self.preview.fit_view()
             if not missing and not load_errors:
-                self.statusBar().showMessage("Assets loaded — cross-sections shown")
+                if used_base_fallback:
+                    self.statusBar().showMessage("Assets loaded — used silhouette for base (no X=0.5 cross-section) — cross-section may look like outline")
+                else:
+                    self.statusBar().showMessage("Assets loaded — cross-sections shown")
 
     def import_pattern(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Pattern STL", "", "STL Files (*.stl);;All Files (*)")
@@ -364,7 +397,7 @@ class MainWindow(QMainWindow):
             self.patterns_list.addItem(Path(path).name)
             # show a small representative item at top-left for preview
             x, y = self._next_preview_offset()
-            preview_item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#cfeff6", z=2)
+            preview_item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#cfeff6", z=4)
             preview_item.setPos(x, y)
             self.preview.scene().addItem(preview_item)
             self.preview.fit_view()
