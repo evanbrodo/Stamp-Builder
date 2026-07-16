@@ -54,3 +54,35 @@ def make_item_from_shapely(geom, pen_color="#333333", fill_color=None, z=0):
         item.setBrush(QBrush(QColor(fill_color)))
     item.setZValue(z)
     return item
+
+
+def make_item_from_polyline(points, pen_color="#003366", z=2.0, close=False, width=0.6):
+    """
+    Create a QGraphicsPathItem from an iterable of points.
+    points: iterable of (x,y) or (x,y,z). Y is flipped internally like other rendering helpers (uses -y).
+    pen_color: stroke color.
+    z: QGraphics z-value for stacking.
+    close: if True, closes the path.
+    width: pen width in scene units (mm).
+    Returns: QGraphicsPathItem (NOT added to any scene).
+    """
+    path = QPainterPath()
+    first = True
+    for p in points:
+        if len(p) >= 2:
+            x, y = float(p[0]), float(p[1])
+        else:
+            continue
+        if first:
+            path.moveTo(x, -y)
+            first = False
+        else:
+            path.lineTo(x, -y)
+    if close:
+        path.closeSubpath()
+    item = QGraphicsPathItem(path)
+    pen = QPen(QColor(pen_color))
+    pen.setWidthF(width)
+    item.setPen(pen)
+    item.setZValue(z)
+    return item

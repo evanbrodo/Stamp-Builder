@@ -367,6 +367,43 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # --- simple slot outlines (basic polylines scaled to tray bounds) ----------------
+        try:
+            def _add_slot_from_cross(cross, color="#a05000", z=6.0, w_ratio=0.90, h_ratio=0.18):
+                # cross: shapely geometry; draw a centered rectangular slot approximating a slot shape
+                minx, miny, maxx, maxy = cross.bounds
+                cx = (minx + maxx) / 2.0
+                cy = (miny + maxy) / 2.0
+                total_w = maxx - minx
+                total_h = maxy - miny
+                slot_w = total_w * w_ratio
+                slot_h = total_h * h_ratio
+                x0 = cx - slot_w / 2.0
+                x1 = cx + slot_w / 2.0
+                y0 = cy - slot_h / 2.0
+                y1 = cy + slot_h / 2.0
+                pts = [
+                    (x0, y0),
+                    (x1, y0),
+                    (x1, y1),
+                    (x0, y1),
+                ]
+                item = rendering.make_item_from_polyline(pts, pen_color=color, z=z, close=True, width=0.6)
+                try:
+                    self.preview.scene().addItem(item)
+                except Exception:
+                    pass
+
+            # add outlines if tray crosses exist (use tray cross if available; base as fallback)
+            if self.tray1_cross is not None:
+                _add_slot_from_cross(self.tray1_cross, color="#a05000", z=6.0)
+            if self.tray2_cross is not None:
+                _add_slot_from_cross(self.tray2_cross, color="#8b4000", z=6.0)
+        except Exception as e:
+            # never crash UI on draw
+            print("Slot-outline draw error:", e)
+        # ----------------------------------------------------------------------------------
+
         if loaded_any:
             self.preview.fit_view()
             if not missing and not load_errors:
