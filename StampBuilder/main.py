@@ -135,6 +135,12 @@ class MainWindow(QMainWindow):
         fit_action.triggered.connect(self.preview.fit_view)
         toolbar.addAction(fit_action)
 
+        # Add a quick toggle for tray mode (single vs double)
+        self.tray_double = True
+        self._tray_action = QAction("Tray: Double", self)
+        self._tray_action.triggered.connect(self._toggle_tray_mode)
+        toolbar.addAction(self._tray_action)
+
         self.statusBar().showMessage("Stamp Builder — ready")
 
         # Keep loaded pattern data (list of dicts)
@@ -143,14 +149,67 @@ class MainWindow(QMainWindow):
         # placed instances (QGraphicsPathItems)
         self.placed_items = []
 
-        # base silhouette cache
-        self.base_silhouette = None
+        # base cross-section cache
+        self.base_cross = None
+        self.tray1_cross = None
+        self.tray2_cross = None
 
         # Try to auto-load assets if available (best-effort)
         self._try_load_assets()
 
+    def _toggle_tray_mode(self):
+        self.tray_double = not self.tray_double
+        self._tray_action.setText("Tray: Double" if self.tray_double else "Tray: Single")
+        # re-render assets (quick redraw)
+        self._try_load_assets()
+
+    def _compute_cross_section(self, mesh, axis='x', ratio=0.5):
+        """Compute a 2D shapely geometry representing a vertical cross-section of `mesh`.
+        axis: 'x' or 'y' determining the plane normal (slice perpendicular to X or Y axis).
+        ratio: 0..1 position along the axis within the mesh bounding box.
+        Returns a shapely geometry or None if no section found.
+        """
+        try:
+            import trimesh
+            from shapely.ops import unary_union
+        except Exception as e:
+            raise ImportError("trimesh and shapely are required for cross-section computation") from e
+
+        try:
+            bounds = mesh.bounds  # array [[minx,miny,minz],[maxx,maxy,maxz]]
+            minb = bounds[0]
+            maxb = bounds[1]
+        except Exception:
+            # if mesh has no bounds, fall back to silhouette
+            return None
+
+        origin = mesh.centroid.copy()
+        if axis == 'x':
+            origin[0] = minb[0] + ratio * (maxb[0] - minb[0])
+            normal = [1.0, 0.0, 0.0]
+        else:
+            origin[1] = minb[1] + ratio * (maxb[1] - minb[1])
+            normal = [0.0, 1.0, 0.0]
+
+        try:
+            section = mesh.section(plane_origin=origin, plane_normal=normal)
+            if section is None:
+                return None
+            path2d = section.to_planar()
+            polys = getattr(path2d, 'polygons_full', None)
+            if not polys:
+                return None
+            geom = unary_union(polys)
+            return geom
+        except Exception as e:
+            # any failure we treat as no cross-section available
+            print("Cross-section compute error:", e)
+            return None
+
     def _try_load_assets(self):
-        # Check which asset files are present
+        # Rebuild the preview scene: clear and then render assets + pattern previews + placed items
+        self.preview.scene().clear()
+
         missing = []
         present = []
         for p in (STAMP_BASE, TRAY1, TRAY2):
@@ -160,47 +219,83 @@ class MainWindow(QMainWindow):
                 present.append(p)
 
         if missing:
-            # Inform user which files are absent (non-fatal)
             self.statusBar().showMessage(f"Missing assets: {', '.join(missing)} — place them in assets/")
 
         loaded_any = False
         load_errors = []
-        # Attempt to load and render any asset that exists
-        for p in present:
+
+        # Load base first
+        if STAMP_BASE.exists():
             try:
-                mesh = geometry.load_mesh(p)
-                sil = geometry.silhouette(mesh)
-                # Choose visual style: base darker, trays lighter
-                if p == STAMP_BASE:
-                    self.base_silhouette = sil
-                    pen_color = "#000000"
-                    fill_color = "#e8e8e8"
-                    z = 0
-                else:
-                    pen_color = "#444444"
-                    fill_color = "#f6f6f6"
-                    z = 1
-                item = rendering.make_item_from_shapely(sil, pen_color=pen_color, fill_color=fill_color, z=z)
+                mesh = geometry.load_mesh(STAMP_BASE)
+                # try vertical cross-section first
+                cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
+                if cross is None:
+                    # fallback to top-down silhouette if no section
+                    sil = geometry.silhouette(mesh)
+                    cross = sil
+                self.base_cross = cross
+                item = rendering.make_item_from_shapely(cross, pen_color="#000000", fill_color="#ffefe0", z=0)
+                self.preview.scene().addItem(item)
+                loaded_any = True
+            except ImportError as e:
+                load_errors.append(f"{STAMP_BASE.name}: missing libs: {e}")
+            except Exception as e:
+                load_errors.append(f"{STAMP_BASE.name}: {e}")
+
+        # Load tray(s) according to mode
+        if TRAY1.exists():
+            try:
+                mesh = geometry.load_mesh(TRAY1)
+                cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
+                if cross is None:
+                    cross = geometry.silhouette(mesh)
+                self.tray1_cross = cross
+                item = rendering.make_item_from_shapely(cross, pen_color="#444444", fill_color="#ffe6e6", z=1)
                 self.preview.scene().addItem(item)
                 loaded_any = True
             except Exception as e:
-                # Record but keep trying other assets
-                load_errors.append(f"{p.name}: {e}")
+                load_errors.append(f"{TRAY1.name}: {e}")
+
+        if self.tray_double and TRAY2.exists():
+            try:
+                mesh = geometry.load_mesh(TRAY2)
+                cross = self._compute_cross_section(mesh, axis='x', ratio=0.5)
+                if cross is None:
+                    cross = geometry.silhouette(mesh)
+                self.tray2_cross = cross
+                item = rendering.make_item_from_shapely(cross, pen_color="#444444", fill_color="#e6ffe6", z=1)
+                self.preview.scene().addItem(item)
+                loaded_any = True
+            except Exception as e:
+                load_errors.append(f"{TRAY2.name}: {e}")
 
         if load_errors:
-            # Show a condensed error message if any asset failed to render
-            self.statusBar().showMessage("Some assets failed to render (requires trimesh/shapely). Check console for details.")
+            self.statusBar().showMessage("Some assets failed to render. Check console for details.")
             for msg in load_errors:
                 print("Asset render error:", msg)
 
+        # Re-create pattern preview items (stacked) so they remain visible after scene clear
+        for i, pat in enumerate(self.patterns):
+            try:
+                preview_item = rendering.make_item_from_shapely(pat['silhouette'], pen_color="#003366", fill_color="#cfeff6", z=2)
+                x, y = (-50 * i, 0)
+                preview_item.setPos(x, y)
+                self.preview.scene().addItem(preview_item)
+            except Exception:
+                pass
+
+        # Re-add placed items (they were removed by clear) so layout persists
+        for it in list(self.placed_items):
+            try:
+                self.preview.scene().addItem(it)
+            except Exception:
+                pass
+
         if loaded_any:
-            # Fit the view to whatever was added
             self.preview.fit_view()
             if not missing and not load_errors:
-                self.statusBar().showMessage("Assets loaded — silhouettes shown")
-            else:
-                # If some were missing/errored we already set a message above; ensure it's visible
-                pass
+                self.statusBar().showMessage("Assets loaded — cross-sections shown")
 
     def import_pattern(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Pattern STL", "", "STL Files (*.stl);;All Files (*)")
@@ -218,13 +313,13 @@ class MainWindow(QMainWindow):
 
         # Create a graphics prototype item (not placed directly)
         try:
-            prototype = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#88ccee", z=1)
+            prototype = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#88ccee", z=2)
             # store pattern with prototype
             self.patterns.append({"path": path, "mesh": mesh, "silhouette": sil, "prototype": prototype})
             self.patterns_list.addItem(Path(path).name)
             # show a small representative item at top-left for preview
             x, y = self._next_preview_offset()
-            preview_item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#cfeff6", z=1)
+            preview_item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#cfeff6", z=2)
             preview_item.setPos(x, y)
             self.preview.scene().addItem(preview_item)
             self.preview.fit_view()
@@ -241,7 +336,10 @@ class MainWindow(QMainWindow):
 
     def clear_placements(self):
         for it in list(self.placed_items):
-            self.preview.scene().removeItem(it)
+            try:
+                self.preview.scene().removeItem(it)
+            except Exception:
+                pass
         self.placed_items = []
         self.statusBar().showMessage("Placements cleared")
 
@@ -279,15 +377,20 @@ class MainWindow(QMainWindow):
         self.clear_placements()
 
         # compute usable area from base silhouette bounding box (fallback to a default rect)
-        if self.base_silhouette is not None:
-            minx, miny, maxx, maxy = self.base_silhouette.bounds
-            # inset by 10% margin
-            margin_x = (maxx - minx) * 0.1
-            margin_y = (maxy - miny) * 0.1
-            ux0 = minx + margin_x
-            uy0 = miny + margin_y
-            ux1 = maxx - margin_x
-            uy1 = maxy - margin_y
+        if self.base_cross is not None:
+            try:
+                minx, miny, maxx, maxy = self.base_cross.bounds
+            except Exception:
+                # if bounds not available, fallback
+                ux0, uy0, ux1, uy1 = -30.0, -10.0, 30.0, 10.0
+            else:
+                # inset by 10% margin
+                margin_x = (maxx - minx) * 0.1
+                margin_y = (maxy - miny) * 0.1
+                ux0 = minx + margin_x
+                uy0 = miny + margin_y
+                ux1 = maxx - margin_x
+                uy1 = maxy - margin_y
         else:
             ux0, uy0, ux1, uy1 = -30.0, -10.0, 30.0, 10.0
 
