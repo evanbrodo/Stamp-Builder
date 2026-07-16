@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QGraphicsView, QGraphicsScene
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter
 
 
 ASSETS_DIR = Path(__file__).parent.parent / "assets"
@@ -22,7 +23,8 @@ class PreviewView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
-        self.setRenderHint(self.renderHints() | Qt.Antialiasing)
+        # Use QPainter's Antialiasing render hint (Qt.Qt does not provide it)
+        self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
