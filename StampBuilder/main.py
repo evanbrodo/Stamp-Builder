@@ -19,10 +19,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QCheckBox,
-    QGraphicsSimpleTextItem,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter, QAction, QFont
+from PySide6.QtGui import QPainter, QAction
 
 from StampBuilder import geometry
 from StampBuilder import rendering
@@ -307,8 +306,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.tray1_cross = cross
-                item = rendering.make_item_from_shapely(cross, pen_color="#444444", fill_color="#ffe6e6", z=1)
-                self.preview.scene().addItem(item)
+                # previously we added a filled tray item here; removed old visualization to avoid duplicates
                 loaded_any = True
             except Exception as e:
                 load_errors.append(f"{TRAY1.name}: {e}")
@@ -332,8 +330,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.tray2_cross = cross
-                item = rendering.make_item_from_shapely(cross, pen_color="#444444", fill_color="#e6ffe6", z=1)
-                self.preview.scene().addItem(item)
+                # removed old filled tray2 visualization to keep only the new measurement outlines
                 loaded_any = True
             except Exception as e:
                 load_errors.append(f"{TRAY2.name}: {e}")
@@ -341,7 +338,7 @@ class MainWindow(QMainWindow):
         # Draw base on top of trays (higher z) so it visually overlays them
         if base_geom is not None:
             try:
-                base_item = rendering.make_item_from_shapely(base_geom, pen_color="#000000", fill_color="#ffefe0", z=3)
+                base_item = rendering.make_item_from_shapely(base_geom, pen_color="#000000", fill_color=None, z=3)
                 self.preview.scene().addItem(base_item)
             except Exception as e:
                 print("Failed to render base on top:", e)
@@ -367,43 +364,6 @@ class MainWindow(QMainWindow):
                 self.preview.scene().addItem(it)
             except Exception:
                 pass
-
-        # --- simple slot outlines (basic polylines scaled to tray bounds) ----------------
-        try:
-            def _add_slot_from_cross(cross, color="#a05000", z=6.0, w_ratio=0.90, h_ratio=0.18):
-                # cross: shapely geometry; draw a centered rectangular slot approximating a slot shape
-                minx, miny, maxx, maxy = cross.bounds
-                cx = (minx + maxx) / 2.0
-                cy = (miny + maxy) / 2.0
-                total_w = maxx - minx
-                total_h = maxy - miny
-                slot_w = total_w * w_ratio
-                slot_h = total_h * h_ratio
-                x0 = cx - slot_w / 2.0
-                x1 = cx + slot_w / 2.0
-                y0 = cy - slot_h / 2.0
-                y1 = cy + slot_h / 2.0
-                pts = [
-                    (x0, y0),
-                    (x1, y0),
-                    (x1, y1),
-                    (x0, y1),
-                ]
-                item = rendering.make_item_from_polyline(pts, pen_color=color, z=z, close=True, width=0.6)
-                try:
-                    self.preview.scene().addItem(item)
-                except Exception:
-                    pass
-
-            # add outlines if tray crosses exist (use tray cross if available; base as fallback)
-            if self.tray1_cross is not None:
-                _add_slot_from_cross(self.tray1_cross, color="#a05000", z=6.0)
-            if self.tray2_cross is not None:
-                _add_slot_from_cross(self.tray2_cross, color="#8b4000", z=6.0)
-        except Exception as e:
-            # never crash UI on draw
-            print("Slot-outline draw error:", e)
-        # ----------------------------------------------------------------------------------
 
         # --- draw centered measurement rectangles per user request -----------------------
         try:
@@ -431,7 +391,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 center_x, center_y = 0.0, 0.0
 
-            def add_centered_rect(width, height, color="#aa2200", z=7.0, label=None):
+            def add_centered_rect(width, height, color="#000000", z=7.0, stroke_width=0.3):
                 x0 = center_x - width / 2.0
                 x1 = center_x + width / 2.0
                 y0 = center_y - height / 2.0
@@ -442,29 +402,30 @@ class MainWindow(QMainWindow):
                     (x1, y1),
                     (x0, y1),
                 ]
-                item = rendering.make_item_from_polyline(pts, pen_color=color, z=z, close=True, width=0.8)
+                item = rendering.make_item_from_polyline(pts, pen_color=color, z=z, close=True, width=stroke_width)
                 try:
                     self.preview.scene().addItem(item)
                 except Exception:
                     pass
-                if label:
-                    try:
-                        text = QGraphicsSimpleTextItem(label)
-                        font = QFont()
-                        font.setPointSize(8)
-                        text.setFont(font)
-                        # place at upper-right outside rectangle with 2mm margin
-                        tx = x1 + 2.0
-                        ty = y1 + 2.0
-                        text.setPos(tx, -ty)
-                        text.setZValue(z + 1)
-                        self.preview.scene().addItem(text)
-                    except Exception:
-                        pass
+                return item
 
-            add_centered_rect(tray1_outer_w, tray1_outer_h, color="#006600", z=7.0, label="Outer 1.25 × 9.193 in")
-            add_centered_rect(tray1_inner_w, tray1_inner_h, color="#cc6600", z=7.5, label="Inner 8.703 × 1.124 in")
-            add_centered_rect(tray2_extra_w, tray2_extra_h, color="#0044cc", z=8.0, label="Extra 0.126 × 8.703 in")
+            # Draw three black, thin rectangles (no labels)
+            add_centered_rect(tray1_outer_w, tray1_outer_h, color="#000000", z=7.0, stroke_width=0.3)
+            add_centered_rect(tray1_inner_w, tray1_inner_h, color="#000000", z=7.5, stroke_width=0.3)
+            add_centered_rect(tray2_extra_w, tray2_extra_h, color="#000000", z=8.0, stroke_width=0.3)
+
+            # If tray is double, draw a thin blue center line; otherwise no line.
+            try:
+                if self.tray_double:
+                    lx0 = center_x - tray1_inner_w / 2.0
+                    lx1 = center_x + tray1_inner_w / 2.0
+                    ly = center_y
+                    line_pts = [(lx0, ly), (lx1, ly)]
+                    line_item = rendering.make_item_from_polyline(line_pts, pen_color="#0000FF", z=9.0, close=False, width=0.3)
+                    self.preview.scene().addItem(line_item)
+            except Exception:
+                pass
+
         except Exception as e:
             print("Measurement rectangles draw error:", e)
         # ----------------------------------------------------------------------------------
