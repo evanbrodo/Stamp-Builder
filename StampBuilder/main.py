@@ -19,9 +19,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QCheckBox,
+    QGraphicsSimpleTextItem,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter, QAction
+from PySide6.QtGui import QPainter, QAction, QFont
 
 from StampBuilder import geometry
 from StampBuilder import rendering
@@ -402,6 +403,70 @@ class MainWindow(QMainWindow):
         except Exception as e:
             # never crash UI on draw
             print("Slot-outline draw error:", e)
+        # ----------------------------------------------------------------------------------
+
+        # --- draw centered measurement rectangles per user request -----------------------
+        try:
+            def _in_to_mm(x):
+                return x * 25.4
+
+            # Using values as confirmed: (converted to mm)
+            tray1_outer_w = _in_to_mm(9.193)   # 233.502 mm
+            tray1_outer_h = _in_to_mm(1.25)    # 31.750 mm
+            tray1_inner_w = _in_to_mm(8.703)   # 221.056 mm
+            tray1_inner_h = _in_to_mm(1.124)   # 28.550 mm (approx)
+            tray2_extra_w = _in_to_mm(8.703)   # 221.056 mm
+            tray2_extra_h = _in_to_mm(0.126)   # 3.200 mm
+
+            # choose center (prefer base centroid, then tray1 centroid, else origin)
+            center_x = 0.0
+            center_y = 0.0
+            try:
+                if self.base_cross is not None:
+                    c = self.base_cross.centroid
+                    center_x, center_y = float(c.x), float(c.y)
+                elif self.tray1_cross is not None:
+                    c = self.tray1_cross.centroid
+                    center_x, center_y = float(c.x), float(c.y)
+            except Exception:
+                center_x, center_y = 0.0, 0.0
+
+            def add_centered_rect(width, height, color="#aa2200", z=7.0, label=None):
+                x0 = center_x - width / 2.0
+                x1 = center_x + width / 2.0
+                y0 = center_y - height / 2.0
+                y1 = center_y + height / 2.0
+                pts = [
+                    (x0, y0),
+                    (x1, y0),
+                    (x1, y1),
+                    (x0, y1),
+                ]
+                item = rendering.make_item_from_polyline(pts, pen_color=color, z=z, close=True, width=0.8)
+                try:
+                    self.preview.scene().addItem(item)
+                except Exception:
+                    pass
+                if label:
+                    try:
+                        text = QGraphicsSimpleTextItem(label)
+                        font = QFont()
+                        font.setPointSize(8)
+                        text.setFont(font)
+                        # place at upper-right outside rectangle with 2mm margin
+                        tx = x1 + 2.0
+                        ty = y1 + 2.0
+                        text.setPos(tx, -ty)
+                        text.setZValue(z + 1)
+                        self.preview.scene().addItem(text)
+                    except Exception:
+                        pass
+
+            add_centered_rect(tray1_outer_w, tray1_outer_h, color="#006600", z=7.0, label="Outer 1.25 × 9.193 in")
+            add_centered_rect(tray1_inner_w, tray1_inner_h, color="#cc6600", z=7.5, label="Inner 8.703 × 1.124 in")
+            add_centered_rect(tray2_extra_w, tray2_extra_h, color="#0044cc", z=8.0, label="Extra 0.126 × 8.703 in")
+        except Exception as e:
+            print("Measurement rectangles draw error:", e)
         # ----------------------------------------------------------------------------------
 
         if loaded_any:
