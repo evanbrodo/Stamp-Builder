@@ -396,247 +396,74 @@ class MainWindow(QMainWindow):
                 print("Asset render error:", msg)
 
         # Re-create pattern preview items (stacked) so they remain visible after scene clear
-        for i, pat in enumerate(self.patterns):
-            try:
-                preview_item = rendering.make_item_from_shapely(pat['silhouette'], pen_color="#003366", fill_color="#cfeff6", z=4)
-                x, y = (-50 * i, 0)
-                preview_item.setPos(x, y)
-                self.preview.scene().addItem(preview_item)
-            except Exception:
-                pass
-
-        # Re-add placed items (they were removed by clear) so layout persists
-        for it in list(self.placed_items):
-            try:
-                self.preview.scene().addItem(it)
-            except Exception:
-                pass
-
-        # --- draw centered measurement rectangles per user request -----------------------
-        try:
-            def _in_to_mm(x):
-                return x * 25.4
-
-            # Using values as confirmed: (converted to mm)
-            tray1_outer_w = _in_to_mm(9.193)   # 233.502 mm
-            tray1_outer_h = _in_to_mm(1.25)    # 31.750 mm
-            tray1_inner_w = _in_to_mm(8.703)   # 221.056 mm
-            tray1_inner_h = _in_to_mm(1.124)   # 28.550 mm (approx)
-            tray2_extra_w = _in_to_mm(8.703)   # 221.056 mm
-            tray2_extra_h = _in_to_mm(0.126)   # 3.200 mm
-
-            # choose center (prefer base centroid, then tray1 centroid, else origin)
-            center_x = 0.0
-            center_y = 0.0
-            try:
-                if self.base_cross is not None:
-                    c = self.base_cross.centroid
-                    center_x, center_y = float(c.x), float(c.y)
-                elif self.tray1_cross is not None:
-                    c = self.tray1_cross.centroid
-                    center_x, center_y = float(c.x), float(c.y)
-            except Exception:
-                center_x, center_y = 0.0, 0.0
-
-            def add_centered_rect(width, height, color="#000000", z=7.0, stroke_width=0.15):
-                x0 = center_x - width / 2.0
-                x1 = center_x + width / 2.0
-                y0 = center_y - height / 2.0
-                y1 = center_y + height / 2.0
-                pts = [
-                    (x0, y0),
-                    (x1, y0),
-                    (x1, y1),
-                    (x0, y1),
-                ]
-                item = rendering.make_item_from_polyline(pts, pen_color=color, z=z, close=True, width=stroke_width)
-                try:
-                    self.preview.scene().addItem(item)
-                except Exception:
-                    pass
-                return item
-
-            # draw two always-visible black thin rectangles (no labels)
-            add_centered_rect(tray1_outer_w, tray1_outer_h, color="#000000", z=7.0, stroke_width=0.15)
-            add_centered_rect(tray1_inner_w, tray1_inner_h, color="#000000", z=7.5, stroke_width=0.15)
-
-            # draw the smallest rectangle only when tray_double is True
-            if self.tray_double:
-                add_centered_rect(tray2_extra_w, tray2_extra_h, color="#000000", z=8.0, stroke_width=0.15)
-
-        except Exception as e:
-            print("Measurement rectangles draw error:", e)
-        # ----------------------------------------------------------------------------------
-
-        if loaded_any:
-            self.preview.fit_view()
-            if not missing and not load_errors:
-                if used_base_fallback:
-                    self.statusBar().showMessage("Assets loaded — used silhouette for base (no X=0.5 cross-section) — cross-section may look like outline")
-                else:
-                    self.statusBar().showMessage("Assets loaded — cross-sections shown")
-
-    def import_pattern(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import Pattern STL", "", "STL Files (*.stl);;All Files (*)")
-        if not path:
-            return
-        try:
-            mesh = geometry.load_mesh(path)
-            sil = geometry.silhouette(mesh)
-        except ImportError as e:
-            QMessageBox.critical(self, "Missing Dependencies", str(e) + "\nInstall requirements.txt and try again.")
-            return
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", f"Failed to load mesh: {e}")
-            return
-
-        # Create a graphics prototype item (not placed directly)
-        try:
-            prototype = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#88ccee", z=2)
-            # store pattern with prototype
-            self.patterns.append({"path": path, "mesh": mesh, "silhouette": sil, "prototype": prototype})
-            self.patterns_list.addItem(Path(path).name)
-            # show a small representative item at top-left for preview
-            x, y = self._next_preview_offset()
-            preview_item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#cfeff6", z=4)
-            preview_item.setPos(x, y)
-            self.preview.scene().addItem(preview_item)
-            self.preview.fit_view()
-            self.statusBar().showMessage(f"Imported pattern: {Path(path).name}")
-        except Exception as e:
-            QMessageBox.critical(self, "Render Error", f"Pattern loaded but failed to render: {e}")
-
-    def _next_preview_offset(self):
-        # stack small previews horizontally so user sees imported items
-        count = len(self.patterns) - 1 if self.patterns else 0
-        x = -50 * count
-        y = 0
-        return x, y
-
-    def clear_placements(self):
-        for it in list(self.placed_items):
-            try:
-                self.preview.scene().removeItem(it)
-            except Exception:
-                pass
-        self.placed_items = []
-        self._base_positions = None
-        self.statusBar().showMessage("Placements cleared")
-
-    def place_sequence_clicked(self):
-        seq = self.sequence_input.text().strip().upper()
-        if not seq:
-            QMessageBox.information(self, "No sequence", "Enter a sequence like AABBC")
-            return
-        try:
-            self.place_sequence(seq)
-        except Exception as e:
-            QMessageBox.critical(self, "Placement Error", str(e))
-
-    def place_sequence(self, sequence):
-        # Map letters A,B,C... to imported patterns in order
-        if not self.patterns:
-            raise RuntimeError("No patterns imported. Import at least one pattern before placing.")
-
-        # build mapping
-        mapping = {}
-        for i, pat in enumerate(self.patterns):
-            letter = chr(ord('A') + i)
-            mapping[letter] = i
-
-        # validate sequence
-        for ch in sequence:
-            if ch < 'A' or ch > 'Z':
-                raise ValueError(f"Invalid character in sequence: {ch}")
-            if ch not in mapping:
-                raise ValueError(
-                    f"Sequence references pattern '{ch}' but only {len(self.patterns)} patterns imported (A..{chr(ord('A')+len(self.patterns)-1)})"
-                )
-
-        # clear prior placements
-        self.clear_placements()
-
-        # compute usable area from base silhouette bounding box (fallback to a default rect)
-        if self.base_cross is not None:
-            try:
-                minx, miny, maxx, maxy = self.base_cross.bounds
-            except Exception:
-                # if bounds not available, fallback
-                ux0, uy0, ux1, uy1 = -30.0, -10.0, 30.0, 10.0
-            else:
-                # inset by 10% margin
-                margin_x = (maxx - minx) * 0.1
-                margin_y = (maxy - miny) * 0.1
-                ux0 = minx + margin_x
-                uy0 = miny + margin_y
-                ux1 = maxx - margin_x
-                uy1 = maxy - margin_y
-        else:
-            ux0, uy0, ux1, uy1 = -30.0, -10.0, 30.0, 10.0
-
-        usable_width = ux1 - ux0
-        usable_height = uy1 - uy0
-        long_axis = 'x' if usable_width >= usable_height else 'y'
-
-        n = len(sequence)
-        if n == 1:
-            base_positions = [((ux0 + ux1) / 2.0, (uy0 + uy1) / 2.0)]
-        elif n == 2:
-            if long_axis == 'x':
-                base_positions = [(ux0, (uy0 + uy1) / 2.0), (ux1, (uy0 + uy1) / 2.0)]
-            else:
-                base_positions = [((ux0 + ux1) / 2.0, uy0), ((ux0 + ux1) / 2.0, uy1)]
-        else:
-            # evenly distribute along long axis
-            base_positions = []
-            for i in range(n):
-                t = i / (n - 1)
-                if long_axis == 'x':
-                    x = ux0 + t * usable_width
-                    y = (uy0 + uy1) / 2.0
-                else:
-                    x = (ux0 + ux1) / 2.0
-                    y = uy0 + t * usable_height
-                base_positions.append((x, y))
-
-        # store base positions (factor=1.0 positions) so slider can interpolate
-        self._base_positions = base_positions
-
-        # apply current spacing_factor to compute actual positions
-        applied_positions = []
-        if self.spacing_factor == 1.0 or len(base_positions) == 1:
-            applied_positions = list(base_positions)
-        else:
-            cx = sum(p[0] for p in base_positions) / len(base_positions)
-            cy = sum(p[1] for p in base_positions) / len(base_positions)
-            for bx, by in base_positions:
-                nx = cx + self.spacing_factor * (bx - cx)
-                ny = cy + self.spacing_factor * (by - cy)
-                applied_positions.append((nx, ny))
-
-        # For each sequence letter, create a new graphics item for that pattern silhouette
-        for pos, ch in zip(applied_positions, sequence):
-            pat_idx = mapping[ch]
-            pat = self.patterns[pat_idx]
-            sil = pat['silhouette']
-            # make an item
-            item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#88ccee", z=2)
-            # QGraphics coordinates: our rendering earlier inverted Y when creating path
-            # We used -y in conversion, so placing at (x, y) requires setting pos to (x, -y)
-            item.setPos(pos[0], -pos[1])
-            self.preview.scene().addItem(item)
-            self.placed_items.append(item)
-
-        self.preview.fit_view()
-        self.statusBar().showMessage(f"Placed sequence: {sequence}")
-
-
-def main():
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+-        for i, pat in enumerate(self.patterns):
+-            try:
+-                preview_item = rendering.make_item_from_shapely(pat['silhouette'], pen_color="#003366", fill_color="#cfeff6", z=4)
+-                x, y = (-50 * i, 0)
+-                preview_item.setPos(x, y)
+-                self.preview.scene().addItem(preview_item)
+-            except Exception:
+-                pass
++        # (preview items removed — don't show imported patterns until placed)
+ 
+         # Re-add placed items (they were removed by clear) so layout persists
+         for it in list(self.placed_items):
+             try:
+                 self.preview.scene().addItem(it)
+             except Exception:
+                 pass
+@@
+-        # Create a graphics prototype item (not placed directly)
+-        try:
+-            prototype = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#88ccee", z=2)
+-            # store pattern with prototype
+-            self.patterns.append({"path": path, "mesh": mesh, "silhouette": sil, "prototype": prototype})
+-            self.patterns_list.addItem(Path(path).name)
+-            # show a small representative item at top-left for preview
+-            x, y = self._next_preview_offset()
+-            preview_item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#cfeff6", z=4)
+-            preview_item.setPos(x, y)
+-            self.preview.scene().addItem(preview_item)
+-            self.preview.fit_view()
+-            self.statusBar().showMessage(f"Imported pattern: {Path(path).name}")
+-        except Exception as e:
+-            QMessageBox.critical(self, "Render Error", f"Pattern loaded but failed to render: {e}")
++        # Create a normalized prototype (origin at bottom-center) and store it; do not preview
++        from shapely.affinity import translate as _shapely_translate
++        try:
++            minx, miny, maxx, maxy = sil.bounds
++            center_x = (minx + maxx) / 2.0
++            baseline = miny
++            norm_sil = _shapely_translate(sil, xoff=-center_x, yoff=-baseline)
++            prototype = rendering.make_item_from_shapely(norm_sil, pen_color="#003366", fill_color=None, z=2)
++            self.patterns.append({"path": path, "mesh": mesh, "silhouette": sil, "normalized": norm_sil, "prototype": prototype})
++            self.patterns_list.addItem(Path(path).name)
++            self.preview.fit_view()
++            self.statusBar().showMessage(f"Imported pattern: {Path(path).name}")
++        except Exception as e:
++            QMessageBox.critical(self, "Render Error", f"Pattern loaded but failed to process: {e}")
+@@
+-        # For each sequence letter, create a new graphics item for that pattern silhouette
+-        for pos, ch in zip(applied_positions, sequence):
+-            pat_idx = mapping[ch]
+-            pat = self.patterns[pat_idx]
+-            sil = pat['silhouette']
+-            # make an item
+-            item = rendering.make_item_from_shapely(sil, pen_color="#003366", fill_color="#88ccee", z=2)
+-            # QGraphics coordinates: our rendering earlier inverted Y when creating path
+-            # We used -y in conversion, so placing at (x, y) requires setting pos to (x, -y)
+-            item.setPos(pos[0], -pos[1])
+-            self.preview.scene().addItem(item)
+-            self.placed_items.append(item)
++        # For each sequence letter, create a new graphics item for that pattern silhouette
++        for pos, ch in zip(applied_positions, sequence):
++            pat_idx = mapping[ch]
++            pat = self.patterns[pat_idx]
++            sil_to_render = pat.get("normalized", pat["silhouette"])
++            # make an item (normalized silhouette has origin at bottom-center)
++            item = rendering.make_item_from_shapely(sil_to_render, pen_color="#003366", fill_color="#88ccee", z=2)
++            # QGraphics coordinates: our rendering earlier inverted Y when creating path
++            # placing at (x, y) will put the bottom-center of the stamp at that position
++            item.setPos(pos[0], -pos[1])
++            self.preview.scene().addItem(item)
++            self.placed_items.append(item)
