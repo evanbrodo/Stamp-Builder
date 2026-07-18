@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QCheckBox,
+    QSlider,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QAction
@@ -134,6 +135,20 @@ class MainWindow(QMainWindow):
         self.tray_mode_btn.clicked.connect(self._toggle_tray_mode)
         placement_layout.addWidget(self.tray_mode_btn)
 
+        # Spacing slider: 0 => all stamps at center, 100 => current spacing
+        slider_row = QHBoxLayout()
+        slider_row.addWidget(QLabel("Spacing:"))
+        self.spacing_slider = QSlider(Qt.Horizontal)
+        self.spacing_slider.setMinimum(0)
+        self.spacing_slider.setMaximum(100)
+        self.spacing_slider.setValue(100)
+        self.spacing_slider.setTickInterval(10)
+        self.spacing_slider.valueChanged.connect(self._on_spacing_slider_changed)
+        slider_row.addWidget(self.spacing_slider)
+        self.spacing_value_label = QLabel("100%")
+        slider_row.addWidget(self.spacing_value_label)
+        placement_layout.addLayout(slider_row)
+
         self.placement_widget.setLayout(placement_layout)
         self.placement_dock.setWidget(self.placement_widget)
         self.addDockWidget(Qt.RightDockWidgetArea, self.placement_dock)
@@ -165,6 +180,10 @@ class MainWindow(QMainWindow):
         self.tray_double = True
         self.show_trays = True
 
+        # spacing control state
+        self.spacing_factor = 1.0  # 0..1 where 0=center, 1=current spacing
+        self._base_positions = None  # stored base positions for last placement (logical coords)
+
         # Try to auto-load assets if available (best-effort)
         self._try_load_assets()
 
@@ -181,6 +200,34 @@ class MainWindow(QMainWindow):
         # update button text
         self.tray_mode_btn.setText("Tray: Double" if self.tray_double else "Tray: Single")
         self._try_load_assets()
+
+    def _on_spacing_slider_changed(self, value):
+        try:
+            self.spacing_factor = max(0.0, min(1.0, float(value) / 100.0))
+            self.spacing_value_label.setText(f"{int(self.spacing_factor*100)}%")
+            # If we have placed items and base positions, update positions live
+            if self._base_positions and self.placed_items:
+                self._apply_spacing_factor_to_placed_items()
+        except Exception:
+            pass
+
+    def _apply_spacing_factor_to_placed_items(self):
+        # Reposition existing placed items by interpolating between center and base positions
+        if not self._base_positions or not self.placed_items:
+            return
+        try:
+            base = self._base_positions
+            n = len(base)
+            # compute center of base positions
+            cx = sum(p[0] for p in base) / n
+            cy = sum(p[1] for p in base) / n
+            for item, (bx, by) in zip(self.placed_items, base):
+                nx = cx + self.spacing_factor * (bx - cx)
+                ny = cy + self.spacing_factor * (by - cy)
+                # setPos uses (x, -y) due to coordinate inversion used elsewhere
+                item.setPos(nx, -ny)
+        except Exception as e:
+            print("Failed to apply spacing factor:", e)
 
     def _compute_cross_section(self, mesh, axis='x', ratio=0.5):
         """Compute a 2D shapely geometry representing a vertical cross-section of `mesh`.
@@ -473,6 +520,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         self.placed_items = []
+        self._base_positions = None
         self.statusBar().showMessage("Placements cleared")
 
     def place_sequence_clicked(self):
@@ -532,15 +580,15 @@ class MainWindow(QMainWindow):
 
         n = len(sequence)
         if n == 1:
-            positions = [((ux0 + ux1) / 2.0, (uy0 + uy1) / 2.0)]
+            base_positions = [((ux0 + ux1) / 2.0, (uy0 + uy1) / 2.0)]
         elif n == 2:
             if long_axis == 'x':
-                positions = [(ux0, (uy0 + uy1) / 2.0), (ux1, (uy0 + uy1) / 2.0)]
+                base_positions = [(ux0, (uy0 + uy1) / 2.0), (ux1, (uy0 + uy1) / 2.0)]
             else:
-                positions = [((ux0 + ux1) / 2.0, uy0), ((ux0 + ux1) / 2.0, uy1)]
+                base_positions = [((ux0 + ux1) / 2.0, uy0), ((ux0 + ux1) / 2.0, uy1)]
         else:
             # evenly distribute along long axis
-            positions = []
+            base_positions = []
             for i in range(n):
                 t = i / (n - 1)
                 if long_axis == 'x':
@@ -549,10 +597,25 @@ class MainWindow(QMainWindow):
                 else:
                     x = (ux0 + ux1) / 2.0
                     y = uy0 + t * usable_height
-                positions.append((x, y))
+                base_positions.append((x, y))
+
+        # store base positions (factor=1.0 positions) so slider can interpolate
+        self._base_positions = base_positions
+
+        # apply current spacing_factor to compute actual positions
+        applied_positions = []
+        if self.spacing_factor == 1.0 or len(base_positions) == 1:
+            applied_positions = list(base_positions)
+        else:
+            cx = sum(p[0] for p in base_positions) / len(base_positions)
+            cy = sum(p[1] for p in base_positions) / len(base_positions)
+            for bx, by in base_positions:
+                nx = cx + self.spacing_factor * (bx - cx)
+                ny = cy + self.spacing_factor * (by - cy)
+                applied_positions.append((nx, ny))
 
         # For each sequence letter, create a new graphics item for that pattern silhouette
-        for pos, ch in zip(positions, sequence):
+        for pos, ch in zip(applied_positions, sequence):
             pat_idx = mapping[ch]
             pat = self.patterns[pat_idx]
             sil = pat['silhouette']
