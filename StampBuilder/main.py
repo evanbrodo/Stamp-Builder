@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.tray1_cross = cross
-                # previously we added a filled tray item here; removed old visualization to avoid duplicates
+                # removed old filled tray visualization to keep only the new measurement outlines
                 loaded_any = True
             except Exception as e:
                 load_errors.append(f"{TRAY1.name}: {e}")
@@ -391,7 +391,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 center_x, center_y = 0.0, 0.0
 
-            def add_centered_rect(width, height, color="#000000", z=7.0, stroke_width=0.3):
+            def add_centered_rect(width, height, color="#000000", z=7.0, stroke_width=0.15):
                 x0 = center_x - width / 2.0
                 x1 = center_x + width / 2.0
                 y0 = center_y - height / 2.0
@@ -409,22 +409,13 @@ class MainWindow(QMainWindow):
                     pass
                 return item
 
-            # Draw three black, thin rectangles (no labels)
-            add_centered_rect(tray1_outer_w, tray1_outer_h, color="#000000", z=7.0, stroke_width=0.3)
-            add_centered_rect(tray1_inner_w, tray1_inner_h, color="#000000", z=7.5, stroke_width=0.3)
-            add_centered_rect(tray2_extra_w, tray2_extra_h, color="#000000", z=8.0, stroke_width=0.3)
+            # draw two always-visible black thin rectangles (no labels)
+            add_centered_rect(tray1_outer_w, tray1_outer_h, color="#000000", z=7.0, stroke_width=0.15)
+            add_centered_rect(tray1_inner_w, tray1_inner_h, color="#000000", z=7.5, stroke_width=0.15)
 
-            # If tray is double, draw a thin blue center line; otherwise no line.
-            try:
-                if self.tray_double:
-                    lx0 = center_x - tray1_inner_w / 2.0
-                    lx1 = center_x + tray1_inner_w / 2.0
-                    ly = center_y
-                    line_pts = [(lx0, ly), (lx1, ly)]
-                    line_item = rendering.make_item_from_polyline(line_pts, pen_color="#0000FF", z=9.0, close=False, width=0.3)
-                    self.preview.scene().addItem(line_item)
-            except Exception:
-                pass
+            # draw the smallest rectangle only when tray_double is True
+            if self.tray_double:
+                add_centered_rect(tray2_extra_w, tray2_extra_h, color="#000000", z=8.0, stroke_width=0.15)
 
         except Exception as e:
             print("Measurement rectangles draw error:", e)
